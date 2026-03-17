@@ -8,7 +8,12 @@ from streamlit_lottie import st_lottie
 
 # --- CONFIGURATION & SETUP ---
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+else:
+    api_key = os.getenv("GEMINI_API_KEY")
+
+
 FILE_NAME = "chef_xora_memory.json"
 
 # [cite: 19] Professional look and feel configuration
