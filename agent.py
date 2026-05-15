@@ -1,5 +1,5 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
 import os
 from dotenv import load_dotenv
 import json
@@ -8,20 +8,25 @@ from streamlit_lottie import st_lottie
 
 # --- CONFIGURATION & SETUP ---
 load_dotenv()
-if "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
-else:
-    api_key = os.getenv("GEMINI_API_KEY")
 
+# Safely check for the API key across local .env, environment variables, and Streamlit secrets
+api_key = os.getenv("GEMINI_API_KEY")
+
+if not api_key:
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass  # Silently ignore if st.secrets doesn't exist locally yet
 
 FILE_NAME = "chef_xora_memory.json"
 
-# [cite: 19] Professional look and feel configuration
+# Professional look and feel configuration
 st.set_page_config(page_title="Chef AI-Xora", page_icon="🍲", layout="wide")
 
 # --- DATA PERSISTENCE LOGIC (The "Human" Connection) ---
 def load_data():
-    #  Ensures the personality remembers lifestyle and allergies
+    # Ensures the personality remembers lifestyle and allergies
     if os.path.exists(FILE_NAME) and os.path.getsize(FILE_NAME) > 0:
         with open(FILE_NAME, "r") as f:
             return json.load(f)
@@ -39,10 +44,14 @@ def save_data(chat_history):
         json.dump(new_memory, diary, indent=4)
     print("📁 Data successfully saved to JSON!")
 
-# --- GEMINI AI SETUP ---
-genai.configure(api_key=api_key)
+# --- MODERN GEMINI AI SETUP ---
+if api_key:
+    client = genai.Client(api_key=api_key)
+else:
+    st.error("🔑 API Key not found! Please check your .env file or Streamlit secrets config.")
+    st.stop()
 
-# [cite: 35, 40] Clever System Instructions - The "Soul" of the Agent
+# Clever System Instructions - The "Soul" of the Agent
 instructions = """
 Role:
 You are 'Chef AI-Xora', a professional, Strategic Kitchen Assistant. 
@@ -57,7 +66,7 @@ Strict Response Guidelines:
    - If it's a question about a specific dish, give the recipe table.
    - If it's a general tip, keep it under 3 sentences.
 4. NO FLUFF: Do not give long introductions. Get straight to the point.
-5. THE HUMAN CONNECTION: Use past memory to keep suggestions relevant (allergies/goals).
+5. THE HUMAN CONNECTION: Use past memory and specified dietary preferences (Vegetarian/Non-Vegetarian) to keep suggestions relevant.
 6. WASTE-WARRIOR: Always prioritize the 'Rescue Ingredient' if provided.
 7. MISSING LINK: Only show the shopping list if the user asks "how to cook" or "what to buy".
 
@@ -67,9 +76,10 @@ Response Standards:
 - Tone: Professional, direct, and senior mentor style.
 """
 
-model = genai.GenerativeModel(
-    model_name='gemini-2.5-flash',
-    system_instruction=instructions
+# New SDK structural requirement for system instructions
+config = genai.types.GenerateContentConfig(
+    system_instruction=instructions,
+    temperature=0.7,
 )
 
 def load_lottieurl(url):
@@ -87,12 +97,19 @@ with st.sidebar:
     st.markdown("*The Living Kitchen Assistant*")
     st.markdown("---")
     
-    st.info("### Deployed by: ZARA MAHAD")
+    st.info("### Deployed by: Team LAZEL")
     st.markdown("---")
     
     st.subheader("📍 Kitchen Strategy")
     rescue_item = st.text_input("🚨 Expiring Item?", placeholder="e.g., Spinach")
     budget = st.number_input("💰 Budget (Rs)", min_value=0, value=500)
+    
+    # Dietary Preference dropdown selection
+    diet_pref = st.selectbox(
+        "🥦 Dietary Preference",
+        options=["Any", "Vegetarian", "Non-Vegetarian"],
+        index=0
+    )
 
     st.markdown("""
         <div style="text-align: center;">
@@ -108,7 +125,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-    # Main UI Header
+# Main UI Header
 st.title("👨‍🍳 Strategic Kitchen Assistant")
 st.caption("Waste-aware and budget-conscious meal planning.")
 
@@ -137,11 +154,12 @@ if prompt := st.chat_input("Ask Chef AI-Xora..."):
     is_greeting = user_said in greetings
     
     if is_greeting:
-        # AI ko force karna ke sirf greet kare
         full_prompt = f"ACT IN GREETING MODE: The user said '{prompt}'. Just give a 1-sentence bossy greeting."
     else:
-        # Strategy mode activate karna
-        full_prompt = f"ACT IN STRATEGY MODE: User Request: {prompt}. (Rescue: {rescue_item}, Budget: Rs.{budget})."
+        full_prompt = (
+            f"ACT IN STRATEGY MODE: User Request: {prompt}. "
+            f"(Rescue: {rescue_item}, Budget: Rs.{budget}, Diet Preference: {diet_pref})."
+        )
     
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -149,13 +167,26 @@ if prompt := st.chat_input("Ask Chef AI-Xora..."):
 
     with st.chat_message("assistant"):
         with st.spinner("Chef AI-Xora is thinking..."):
-            history_for_gemini = [
-                {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
-                for m in st.session_state.messages[:-1]
-            ]
             
-            chat_session = model.start_chat(history=history_for_gemini)
+            # Format conversational chat history context for the modern SDK
+            history_for_gemini = []
+            for m in st.session_state.messages[:-1]:
+                role_to_set = "model" if m["role"] == "assistant" else "user"
+                history_for_gemini.append(
+                    genai.types.Content(
+                        role=role_to_set,
+                        parts=[genai.types.Part.from_text(text=m["content"])]
+                    )
+                )
+            
             try:
+                # Setup active chat session with structural configurations using the new library syntax
+                chat_session = client.chats.create(
+                    model='gemini-2.5-flash',
+                    history=history_for_gemini,
+                    config=config
+                )
+                
                 response = chat_session.send_message(full_prompt)
                 full_response = response.text
                 st.markdown(full_response)
@@ -163,7 +194,4 @@ if prompt := st.chat_input("Ask Chef AI-Xora..."):
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
                 save_data(st.session_state.messages) 
             except Exception as e:
-                st.error(f"Error: {e}")
-
-
-
+                st.error(f"Error encountered during generation: {e}")
